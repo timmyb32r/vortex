@@ -13,6 +13,8 @@ use divan::Bencher;
 use mimalloc::MiMalloc;
 use rand::RngExt;
 use rand::SeedableRng;
+use rand::distr::Distribution;
+use rand::distr::StandardUniform;
 use rand::rngs::StdRng;
 use vortex_array::ArrayRef;
 use vortex_array::Canonical;
@@ -445,5 +447,66 @@ fn interleave(bencher: Bencher) {
             let interleaved = InterleaveArray::try_new(values, array_indices, row_indices);
             execute_canonical(interleaved.map(IntoArray::into_array), ctx)
         },
+    );
+}
+
+fn widen_child<T: NativePType>(values: &Buffer<T>, logical: PType) -> ArrayRef {
+    let child = PrimitiveArray::new(values.clone(), Validity::NonNullable);
+    let array = WidenArray::try_new(child.into_array(), logical.into())
+        .vortex_expect("the child fits the logical integer type")
+        .into_array();
+    mark_optimized(&array, &SESSION).vortex_expect("optimize the benchmark input");
+    array
+}
+
+fn binary_case<L, R>(bencher: Bencher, len: usize, logical: PType, op: Operator)
+where
+    L: NativePType,
+    R: NativePType,
+    StandardUniform: Distribution<L> + Distribution<R>,
+{
+    let mut rng = StdRng::seed_from_u64(10);
+    let lhs: Buffer<L> = (0..len).map(|_| rng.random::<L>()).collect();
+    let rhs: Buffer<R> = (0..len).map(|_| rng.random::<R>()).collect();
+    bench_case(
+        bencher,
+        || (widen_child(&lhs, logical), widen_child(&rhs, logical)),
+        |(lhs, rhs), ctx| execute_canonical(lhs.binary(rhs, op), ctx),
+    );
+}
+
+#[divan::bench(args = [32, LEN])]
+fn add_signed(bencher: Bencher, len: usize) {
+    binary_case::<i8, i16>(bencher, len, PType::I64, Operator::Add);
+}
+
+#[divan::bench(args = [32, LEN])]
+fn add_unsigned(bencher: Bencher, len: usize) {
+    binary_case::<u8, u16>(bencher, len, PType::U64, Operator::Add);
+}
+
+#[divan::bench(args = [32, LEN])]
+fn compare_signed(bencher: Bencher, len: usize) {
+    binary_case::<i8, i16>(bencher, len, PType::I64, Operator::Lt);
+}
+
+#[divan::bench(args = [32, LEN])]
+fn compare_unsigned(bencher: Bencher, len: usize) {
+    binary_case::<u8, u16>(bencher, len, PType::U64, Operator::Lt);
+}
+
+/// Encodes a fresh 64-bit array with extrema that select different widths.
+#[divan::bench(types = [i64, u64], args = [32, LEN])]
+fn encode_widen<T: NativePType + From<u16>>(bencher: Bencher, len: usize) {
+    let mut rng = StdRng::seed_from_u64(7);
+    let values: Buffer<T> = std::iter::once(0u16)
+        .chain((1..len).map(|_| rng.random_range(256u16..=10_000)))
+        .map(<T as From<u16>>::from)
+        .collect();
+
+    bench_case(
+        bencher,
+        || PrimitiveArray::new(values.clone(), Validity::NonNullable),
+        |array, ctx| WidenArray::encode(array, ctx).vortex_expect("the input is an integer array"),
     );
 }
