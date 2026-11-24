@@ -309,6 +309,10 @@ name = "widen"
 harness = false
 
 [[bench]]
+name = "ptype_max"
+harness = false
+
+[[bench]]
 name = "widen_decimal"
 harness = false
 

@@ -43,6 +43,7 @@
     "patches_lookup": 10,
     "piecewise_sequence_take_primitive": 10,
     "probe": 6,
+    "ptype_max": 2,
     "row_fn_bool_retry": 0,
     "row_fn_output": 0,
     "row_fn_utf8_input": 0,
