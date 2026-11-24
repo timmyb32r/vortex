@@ -3,7 +3,7 @@
 
 //! Compute on integer `Widen` arrays.
 //!
-//! Each case runs one operation on a `Widen` with logical dtype `i64` over an `i16` child.
+//! Most cases run on a `Widen` with logical dtype `i64` over an `i16` child.
 //! The `decode` case measures materialization separately from the operations that can use
 //! the narrower child directly.
 
@@ -374,6 +374,38 @@ fn zip(bencher: Bencher) {
             (mask, if_true.widen(), if_false.widen())
         },
         |(mask, if_true, if_false), ctx| execute_canonical(mask.zip(if_true, if_false), ctx),
+    );
+}
+
+/// Measures the per-array cost of zip on 32 rows with signed or unsigned children.
+#[divan::bench(types = [i16, u16])]
+fn zip_short<T: NativePType + From<u8>>(bencher: Bencher) {
+    let rows = 0..32u8;
+    let left: Buffer<T> = rows.clone().map(<T as From<u8>>::from).collect();
+    let right: Buffer<T> = rows.clone().rev().map(<T as From<u8>>::from).collect();
+    let selection: BitBuffer = rows.map(|row| row % 2 == 0).collect();
+    let logical = if T::PTYPE.is_signed_int() {
+        PType::I64
+    } else {
+        PType::U64
+    };
+    let widen = |values: &Buffer<T>| {
+        let child = PrimitiveArray::new(values.clone(), Validity::NonNullable);
+        let array = WidenArray::try_new(child.into_array(), logical.into())
+            .vortex_expect("the child widens to a 64-bit integer of the same signedness")
+            .into_array();
+        mark_optimized(&array, &SESSION).vortex_expect("optimize the benchmark input");
+        array
+    };
+
+    bench_case(
+        bencher,
+        || {
+            let mask = selection.clone().into_array();
+            mark_optimized(&mask, &SESSION).vortex_expect("optimize the benchmark input");
+            (mask, widen(&left), widen(&right))
+        },
+        |(mask, left, right), ctx| execute_canonical(mask.zip(left, right), ctx),
     );
 }
 
